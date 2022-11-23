@@ -110,6 +110,15 @@ func readInPayloads() (goodPayloadDecoded []byte, badPayloadDecoded []byte, good
 	timestampsBadPayloadString := string(timestampsBadPayloadByte)
 	timestampsBadPayload = strings.Split(timestampsBadPayloadString, "\r\n")
 
+	// read in the file "timestamps-bad.txt" into a byte array
+	badTimestampsGoodPayloadByte, err := os.ReadFile("./bad/timestamps.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// convert the byte array to a string array separated by newlines
+	badTimestampsGoodPayloadBString := string(badTimestampsGoodPayloadByte)
+	badTimestampsGoodPayload = strings.Split(badTimestampsGoodPayloadBString, "\r\n")
 	return
 }
 
@@ -126,7 +135,7 @@ func sendPayload(payload []byte, timestamps []string, client MQTT.Client, OUTPUT
 	// defer sending the amount of sent messages
 	defer func() {
 		endActualTimestamp := int(time.Now().UnixNano() / 1e6)
-		println(name, "Sent", totalAmountOfSentMessages, "messages", endActualTimestamp)
+		println("---RESULT ---", name, "Sent", totalAmountOfSentMessages, "messages", endActualTimestamp)
 	}()
 
 	// shitty line
@@ -135,8 +144,8 @@ func sendPayload(payload []byte, timestamps []string, client MQTT.Client, OUTPUT
 	}
 	for index, timestamp := range timestamps {
 		// // stop after 100 seconds
-		// if lastTimestamp >= 300000 {
-		// 	println(name, "Stopping after 300 seconds")
+		// if lastTimestamp >= 200000 {
+		// 	println(name, "Stopping after 200 seconds")
 		// 	break
 		// }
 
@@ -225,13 +234,17 @@ func mainMQTT(OUTPUT_TOPIC string, HOST string, PORT string) {
 
 	wg.Wait()
 
+	// sleep for 60 seconds
+	println("Sleeping for 60 seconds...")
+	time.Sleep(60 * time.Second)
+
 	// Now send good and bad payloads
 	print("Sending good and bad payload to the broker...")
 
 	var wgBad sync.WaitGroup
 	wgBad.Add(2)
 
-	go sendPayload(goodPayloadDecoded, badTimestampsGoodPayload, client, OUTPUT_TOPIC, &wgBad, "Good")
+	go sendPayload(goodPayloadDecoded, badTimestampsGoodPayload, client, OUTPUT_TOPIC, &wgBad, "Good with bad timestamps")
 	go sendPayload(badPayloadDecoded, timestampsBadPayload, client, OUTPUT_TOPIC, &wgBad, "Bad")
 
 	wgBad.Wait()
