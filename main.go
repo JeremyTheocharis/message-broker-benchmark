@@ -4,11 +4,11 @@ package main
 
 // Importing the required packages
 import (
-	"bufio"
 	"encoding/base64"
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
@@ -57,6 +57,93 @@ func OnConnectionLost(c MQTT.Client, err error) {
 	println("Connection lost", err, optionsReader.ClientID())
 }
 
+func readInPayloads() (goodPayloadDecoded []byte, badPayloadDecoded []byte, goodTimestampsGoodPayload []string, timestampsBadPayload []string, badTimestampsGoodPayload []string) {
+
+	// read in the good payload
+	goodPayload, err := os.ReadFile("good-payload-audio.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// convert to string
+	goodPayloadString := string(goodPayload)
+
+	// decode from base64
+	goodPayloadDecoded, err = base64.StdEncoding.DecodeString(goodPayloadString)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// // read in the bad payload
+	// badPayload, err := os.ReadFile("./bad/bad-payload-audio.txt")
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	// // convert to string
+	// badPayloadString := string(badPayload)
+
+	// // decode from base64
+	// badPayloadDecoded, err = base64.StdEncoding.DecodeString(badPayloadString)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	// read in the file "timestamps.txt" and "timestamps-bad.txt" into a byte array
+	goodTimestampsGoodPayloadByte, err := os.ReadFile("timestamps.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// convert the byte array to a string array separated by newlines
+	goodTimestampsGoodPayloadString := string(goodTimestampsGoodPayloadByte)
+	goodTimestampsGoodPayload = strings.Split(goodTimestampsGoodPayloadString, "\r\n")
+
+	// read in the file "timestamps-bad.txt" into a byte array
+	timestampsBadPayloadByte, err := os.ReadFile("./bad/timestamps-bad.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// convert the byte array to a string array separated by newlines
+	timestampsBadPayloadString := string(timestampsBadPayloadByte)
+	timestampsBadPayload = strings.Split(timestampsBadPayloadString, "\r\n")
+
+	return
+}
+
+// // getOnMessageReceived gets the function onMessageReceived, that is called everytime a message is received by a specific topic
+// // TODO: thread safe
+// func getOnMessageReceived(timestampQueue chan string) func(MQTT.Client, MQTT.Message) {
+
+// 	return func(client MQTT.Client, message MQTT.Message) {
+// 		topic := message.Topic()
+// 		payload := message.Payload()
+
+// 		// parse payload as json
+// 		var payloadJSON map[string]interface{}
+// 		err := json.Unmarshal(payload, &payloadJSON)
+// 		if err != nil {
+// 			log.Fatal(err)
+// 		}
+
+// 		// get timestamp from payload
+// 		timestamp := payloadJSON["timestamp"].(string)
+
+// 		// add timestamp to queue
+// 		timestampQueue <- timestamp
+
+// 		// get total queue length
+// 		queueLength := len(timestampQueue)
+
+// 		// print queue length every 20 messages
+// 		if queueLength%20 == 0 {
+// 			println("Queue length:", queueLength)
+// 		}
+
+// 	}
+// }
+
 // MQTT function, which sends the payload to the MQTT broker
 func mainMQTT(OUTPUT_TOPIC string, HOST string, PORT string) {
 	// connect to the MQTT broker
@@ -78,68 +165,52 @@ func mainMQTT(OUTPUT_TOPIC string, HOST string, PORT string) {
 		println("Waiting for connection to be established...")
 	}
 
-	// read all files in the current directory
-	files, err := os.ReadDir(".")
-	if err != nil {
-		log.Fatal(err)
+	// returnedTimestampQueue := make(chan string, 3600*5)
+
+	// // subscribe to the topic returning the aggregated data
+	// if token := client.Subscribe("/development/predictive_maintenance/aggrResOUT", 0, getOnMessageReceived(returnedTimestampQueue)); token.Wait() && token.Error() != nil {
+	// 	println(token.Error())
+	// 	os.Exit(1)
+	// }
+
+	// read in the payloads
+	goodPayloadDecoded, badPayloadDecoded, goodTimestampsGoodPayload, timestampsBadPayload, badTimestampsGoodPayload := readInPayloads()
+
+	if false {
+		println(badPayloadDecoded, goodTimestampsGoodPayload, timestampsBadPayload, badTimestampsGoodPayload)
 	}
-
-	// loop through all files in the current directory and print them
-	for _, file := range files {
-		println(file.Name())
-	}
-
-	// read in the file "good-payload-audio.txt"
-	file, err := os.Open("good-payload-audio.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-
-	// read in the file "timestamps.txt"
-	file2, err := os.Open("timestamps.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file2.Close()
-
-	// get the first line of the file good-payload-audio.txt
-	goodPayload, err := os.ReadFile("good-payload-audio.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// convert to string
-	goodPayloadString := string(goodPayload)
-
-	// decode from base64
-	goodPayloadDecoded, err := base64.StdEncoding.DecodeString(goodPayloadString)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// print goodPayload
-	println("This is the good payload: ", goodPayloadDecoded)
+	// Starting with the good payload, send it to the broker
+	print("Sending good payload to the broker...")
 
 	// go though the file timestamps.txt and send the payload according to the timestamps
-	scanner2 := bufio.NewScanner(file2)
 	lastTimestamp := 0
-	for scanner2.Scan() {
+	for index, timestamp := range goodTimestampsGoodPayload {
 		// get the timestamp, sleep, and send the payload
-		currentTimestampString := scanner2.Text()
+		currentTimestampString := timestamp
 		currentTimestamp, err := strconv.Atoi(currentTimestampString)
 		if err != nil {
 			log.Fatal(err)
 		}
 		timeToWait := currentTimestamp - lastTimestamp
 		lastTimestamp = currentTimestamp
-		// sleep now and print the time
+
+		// sleep now
 		time.Sleep(time.Duration(timeToWait) * time.Millisecond)
-		log.Println("Sending payload at", time.Now().Format("2006-01-02 15:04:05.000"), OUTPUT_TOPIC)
 
 		// send the payload to the MQTT broker
-		client.Publish(OUTPUT_TOPIC, 0, false, goodPayloadDecoded)
+		go client.Publish(OUTPUT_TOPIC, 0, false, goodPayloadDecoded)
+
+		// print the progress
+		if index%10 == 0 {
+			println("Sent", index, "payloads")
+		}
+
+		// stop after 100 messages
+		if index == 100 {
+			break
+		}
 	}
+
 }
 
 // Kafka function, which sends the payload to the Kafka broker

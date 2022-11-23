@@ -22,6 +22,9 @@ RUN GOOS=linux go build -tags musl,kafka -a --mod=readonly -installsuffix cgo -l
 ADD good-payload-audio.txt /build/good-payload-audio.txt
 ADD timestamps.txt /build/timestamps.txt
 
+# Add bad payloads
+ADD bad/ /build/bad
+
 FROM alpine
 COPY --from=builder /build /app/
 WORKDIR /app
