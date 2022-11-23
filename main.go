@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
@@ -74,20 +75,20 @@ func readInPayloads() (goodPayloadDecoded []byte, badPayloadDecoded []byte, good
 		log.Fatal(err)
 	}
 
-	// // read in the bad payload
-	// badPayload, err := os.ReadFile("./bad/bad-payload-audio.txt")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
+	// read in the bad payload
+	badPayload, err := os.ReadFile("./bad/bad-payload-audio.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	// // convert to string
-	// badPayloadString := string(badPayload)
+	// convert to string
+	badPayloadString := string(badPayload)
 
-	// // decode from base64
-	// badPayloadDecoded, err = base64.StdEncoding.DecodeString(badPayloadString)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
+	// decode from base64
+	badPayloadDecoded, err = base64.StdEncoding.DecodeString(badPayloadString)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// read in the file "timestamps.txt" and "timestamps-bad.txt" into a byte array
 	goodTimestampsGoodPayloadByte, err := os.ReadFile("timestamps.txt")
@@ -112,37 +113,79 @@ func readInPayloads() (goodPayloadDecoded []byte, badPayloadDecoded []byte, good
 	return
 }
 
-// // getOnMessageReceived gets the function onMessageReceived, that is called everytime a message is received by a specific topic
-// // TODO: thread safe
-// func getOnMessageReceived(timestampQueue chan string) func(MQTT.Client, MQTT.Message) {
+// sendPayload sends a payload in defined intervals to the MQTT broker
+func sendPayload(payload []byte, timestamps []string, client MQTT.Client, OUTPUT_TOPIC string, wg *sync.WaitGroup, name string) {
+	defer wg.Done()
 
-// 	return func(client MQTT.Client, message MQTT.Message) {
-// 		topic := message.Topic()
-// 		payload := message.Payload()
+	lastTimestamp := 0
+	// get the actual current timestamp in ms
+	initialActualTimestamp := int(time.Now().UnixNano() / 1e6)
+	println(name, "Start", initialActualTimestamp)
+	totalAmountOfSentMessages := 0
 
-// 		// parse payload as json
-// 		var payloadJSON map[string]interface{}
-// 		err := json.Unmarshal(payload, &payloadJSON)
-// 		if err != nil {
-// 			log.Fatal(err)
-// 		}
+	// defer sending the amount of sent messages
+	defer func() {
+		endActualTimestamp := int(time.Now().UnixNano() / 1e6)
+		println(name, "Sent", totalAmountOfSentMessages, "messages", endActualTimestamp)
+	}()
 
-// 		// get timestamp from payload
-// 		timestamp := payloadJSON["timestamp"].(string)
+	// shitty line
+	if false {
+		println("shitty line", lastTimestamp)
+	}
+	for index, timestamp := range timestamps {
+		// // stop after 100 seconds
+		// if lastTimestamp >= 300000 {
+		// 	println(name, "Stopping after 300 seconds")
+		// 	break
+		// }
 
-// 		// add timestamp to queue
-// 		timestampQueue <- timestamp
+		// get the timestamp, sleep, and send the payload
+		currentTimestampString := timestamp
+		currentTimestamp, err := strconv.Atoi(currentTimestampString)
+		if err != nil {
+			println(name, "Error converting timestamp to int", currentTimestampString)
+			println(err)
+			continue
+		}
 
-// 		// get total queue length
-// 		queueLength := len(timestampQueue)
+		lastTimestamp = currentTimestamp
+		// get the actual current timestamp in ms
+		actualTimestamp := int(time.Now().UnixNano() / 1e6)
+		timeSinceProgramStart := actualTimestamp - initialActualTimestamp
 
-// 		// print queue length every 20 messages
-// 		if queueLength%20 == 0 {
-// 			println("Queue length:", queueLength)
-// 		}
+		// sleep until the timestamp is reached or do not sleep if the timestamp is in the past
+		if currentTimestamp > timeSinceProgramStart {
+			println(name, "Sleeping for", currentTimestamp-timeSinceProgramStart, "ms")
+			time.Sleep(time.Duration(currentTimestamp-timeSinceProgramStart) * time.Millisecond)
+		} else {
+			println(name, "Not sleeping because timestamp is in the past")
+		}
 
-// 	}
-// }
+		// send the payload to the MQTT broker, if the connection is lost, try to reconnect and send the message again
+		token := client.Publish(OUTPUT_TOPIC, 0, false, payload)
+		token.Wait()
+		if token.Error() != nil {
+			println("Error publishing message", token.Error())
+			println("Trying to reconnect")
+			token = client.Connect()
+			// wait for the connection to be established, at least 300 seconds
+			token.WaitTimeout(300 * time.Second)
+			if token.Error() != nil {
+				println("Error reconnecting", token.Error())
+				break
+			}
+		}
+
+		totalAmountOfSentMessages++
+
+		// print the progress
+		if index%10 == 0 {
+			println(name, "Sent", index, "payloads")
+		}
+
+	}
+}
 
 // MQTT function, which sends the payload to the MQTT broker
 func mainMQTT(OUTPUT_TOPIC string, HOST string, PORT string) {
@@ -165,52 +208,46 @@ func mainMQTT(OUTPUT_TOPIC string, HOST string, PORT string) {
 		println("Waiting for connection to be established...")
 	}
 
-	// returnedTimestampQueue := make(chan string, 3600*5)
-
-	// // subscribe to the topic returning the aggregated data
-	// if token := client.Subscribe("/development/predictive_maintenance/aggrResOUT", 0, getOnMessageReceived(returnedTimestampQueue)); token.Wait() && token.Error() != nil {
-	// 	println(token.Error())
-	// 	os.Exit(1)
-	// }
-
 	// read in the payloads
 	goodPayloadDecoded, badPayloadDecoded, goodTimestampsGoodPayload, timestampsBadPayload, badTimestampsGoodPayload := readInPayloads()
 
+	// yes, this line is shit
 	if false {
 		println(badPayloadDecoded, goodTimestampsGoodPayload, timestampsBadPayload, badTimestampsGoodPayload)
 	}
+
 	// Starting with the good payload, send it to the broker
 	print("Sending good payload to the broker...")
+	var wg sync.WaitGroup
+	wg.Add(1)
 
-	// go though the file timestamps.txt and send the payload according to the timestamps
-	lastTimestamp := 0
-	for index, timestamp := range goodTimestampsGoodPayload {
-		// get the timestamp, sleep, and send the payload
-		currentTimestampString := timestamp
-		currentTimestamp, err := strconv.Atoi(currentTimestampString)
-		if err != nil {
-			log.Fatal(err)
-		}
-		timeToWait := currentTimestamp - lastTimestamp
-		lastTimestamp = currentTimestamp
+	go sendPayload(goodPayloadDecoded, goodTimestampsGoodPayload, client, OUTPUT_TOPIC, &wg, "Good")
 
-		// sleep now
-		time.Sleep(time.Duration(timeToWait) * time.Millisecond)
+	wg.Wait()
 
-		// send the payload to the MQTT broker
-		go client.Publish(OUTPUT_TOPIC, 0, false, goodPayloadDecoded)
+	// Now send good and bad payloads
+	print("Sending good and bad payload to the broker...")
 
-		// print the progress
-		if index%10 == 0 {
-			println("Sent", index, "payloads")
-		}
+	var wgBad sync.WaitGroup
+	wgBad.Add(2)
 
-		// stop after 100 messages
-		if index == 100 {
-			break
-		}
-	}
+	go sendPayload(goodPayloadDecoded, badTimestampsGoodPayload, client, OUTPUT_TOPIC, &wgBad, "Good")
+	go sendPayload(badPayloadDecoded, timestampsBadPayload, client, OUTPUT_TOPIC, &wgBad, "Bad")
 
+	wgBad.Wait()
+
+	// Now execute this multiple times in parallel
+	// count := 20
+	// print("Sending", count, "times good payloads")
+
+	// var wgPerformance sync.WaitGroup
+	// wgPerformance.Add(count)
+
+	// for i := 0; i < count; i++ {
+	// 	go sendPayload(goodPayloadDecoded, goodTimestampsGoodPayload, client, OUTPUT_TOPIC, &wgPerformance, strconv.Itoa(i))
+	// }
+
+	// wgPerformance.Wait()
 }
 
 // Kafka function, which sends the payload to the Kafka broker
