@@ -1,48 +1,12 @@
-// This program loads in the file "good-payload-audio.txt" and "timestamps.txt" and sends the payload according to the timestamps to a MQTT or Kafka broker
-
 package main
 
-// Importing the required packages
 import (
-	"encoding/base64"
-	"log"
-	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	MQTT "github.com/eclipse/paho.mqtt.golang"
 )
-
-// main function, which reads in the env variables and calls either the MQTT or Kafka function
-func main() {
-	println("Starting file-importer")
-	// Read in env variable MQTTEnabled and set it to false by default
-	MQTTEnabled := os.Getenv("MQTTEnabled")
-	if MQTTEnabled == "" {
-		MQTTEnabled = "false"
-	}
-
-	// Read in the variable OUTPUT_TOPIC and set it to /development/predictive_maintenance/rawAudio by default
-	OUTPUT_TOPIC := os.Getenv("OUTPUT_TOPIC")
-	if OUTPUT_TOPIC == "" {
-		OUTPUT_TOPIC = "/development/predictive_maintenance/rawAudio"
-	}
-
-	// read in host and port
-	HOST := os.Getenv("HOST")
-	PORT := os.Getenv("PORT")
-
-	// Call the MQTT function if MQTTEnabled is true
-	if MQTTEnabled == "true" {
-		mainMQTT(OUTPUT_TOPIC, HOST, PORT)
-	} else {
-		// Call the Kafka function if MQTTEnabled is false
-		mainKafka(OUTPUT_TOPIC, HOST, PORT)
-	}
-
-}
 
 // OnConnect subscribes once the connection is established. Required to re-subscribe when cleansession is True
 func OnConnect(c MQTT.Client) {
@@ -56,70 +20,6 @@ func OnConnectionLost(c MQTT.Client, err error) {
 
 	optionsReader := c.OptionsReader()
 	println("Connection lost", err, optionsReader.ClientID())
-}
-
-func readInPayloads() (goodPayloadDecoded []byte, badPayloadDecoded []byte, goodTimestampsGoodPayload []string, timestampsBadPayload []string, badTimestampsGoodPayload []string) {
-
-	// read in the good payload
-	goodPayload, err := os.ReadFile("good-payload-audio.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// convert to string
-	goodPayloadString := string(goodPayload)
-
-	// decode from base64
-	goodPayloadDecoded, err = base64.StdEncoding.DecodeString(goodPayloadString)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// read in the bad payload
-	badPayload, err := os.ReadFile("./bad/bad-payload-audio.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// convert to string
-	badPayloadString := string(badPayload)
-
-	// decode from base64
-	badPayloadDecoded, err = base64.StdEncoding.DecodeString(badPayloadString)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// read in the file "timestamps.txt" and "timestamps-bad.txt" into a byte array
-	goodTimestampsGoodPayloadByte, err := os.ReadFile("timestamps.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// convert the byte array to a string array separated by newlines
-	goodTimestampsGoodPayloadString := string(goodTimestampsGoodPayloadByte)
-	goodTimestampsGoodPayload = strings.Split(goodTimestampsGoodPayloadString, "\r\n")
-
-	// read in the file "timestamps-bad.txt" into a byte array
-	timestampsBadPayloadByte, err := os.ReadFile("./bad/timestamps-bad.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// convert the byte array to a string array separated by newlines
-	timestampsBadPayloadString := string(timestampsBadPayloadByte)
-	timestampsBadPayload = strings.Split(timestampsBadPayloadString, "\r\n")
-
-	// read in the file "timestamps-bad.txt" into a byte array
-	badTimestampsGoodPayloadByte, err := os.ReadFile("./bad/timestamps.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// convert the byte array to a string array separated by newlines
-	badTimestampsGoodPayloadBString := string(badTimestampsGoodPayloadByte)
-	badTimestampsGoodPayload = strings.Split(badTimestampsGoodPayloadBString, "\r\n")
-	return
 }
 
 // sendPayload sends a payload in defined intervals to the MQTT broker
@@ -217,37 +117,39 @@ func mainMQTT(OUTPUT_TOPIC string, HOST string, PORT string) {
 		println("Waiting for connection to be established...")
 	}
 
-	// read in the payloads
-	goodPayloadDecoded, badPayloadDecoded, goodTimestampsGoodPayload, timestampsBadPayload, badTimestampsGoodPayload := readInPayloads()
+	// EXECUTE CASE 1: PERFECT
 
-	// yes, this line is shit
-	if false {
-		println(badPayloadDecoded, goodTimestampsGoodPayload, timestampsBadPayload, badTimestampsGoodPayload)
-	}
-
-	// Starting with the good payload, send it to the broker
-	print("Sending good payload to the broker...")
+	print("Sending case_perfect to the broker...")
+	// read the payload
+	casePerfectPayload, casePerfectTimestamps := readInPerfectCase()
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	go sendPayload(goodPayloadDecoded, goodTimestampsGoodPayload, client, OUTPUT_TOPIC, &wg, "Good")
+	go sendPayload(casePerfectPayload, casePerfectTimestamps, client, OUTPUT_TOPIC, &wg, "case_perfect")
 
 	wg.Wait()
 
+	println("case_perfect sent")
 	// sleep for 60 seconds
 	println("Sleeping for 60 seconds...")
 	time.Sleep(60 * time.Second)
 
-	// Now send good and bad payloads
-	print("Sending good and bad payload to the broker...")
+	// EXECUTE CASE 2: DELAYED WITH INCORRECT MESSAGES
+	print("Sending case_delayed and case_incorrect to the broker...")
+
+	// read the payload
+	caseDelayedPayload, caseDelayedTimestamps := readInDelayedCase()
+	caseIncorrectPayload, caseIncorrectTimestamps := readInIncorrectCase()
 
 	var wgBad sync.WaitGroup
 	wgBad.Add(2)
 
-	go sendPayload(goodPayloadDecoded, badTimestampsGoodPayload, client, OUTPUT_TOPIC, &wgBad, "Good with bad timestamps")
-	go sendPayload(badPayloadDecoded, timestampsBadPayload, client, OUTPUT_TOPIC, &wgBad, "Bad")
+	go sendPayload(caseDelayedPayload, caseDelayedTimestamps, client, OUTPUT_TOPIC, &wgBad, "case_delayed")
+	go sendPayload(caseIncorrectPayload, caseIncorrectTimestamps, client, OUTPUT_TOPIC, &wgBad, "case_incorrect")
 
 	wgBad.Wait()
+
+	println("case_delayed and case_incorrect sent")
 
 	// Now execute this multiple times in parallel
 	// count := 20
@@ -261,9 +163,4 @@ func mainMQTT(OUTPUT_TOPIC string, HOST string, PORT string) {
 	// }
 
 	// wgPerformance.Wait()
-}
-
-// Kafka function, which sends the payload to the Kafka broker
-func mainKafka(OUTPUT_TOPIC string, HOST string, PORT string) {
-
 }

@@ -13,17 +13,14 @@ RUN go mod download
 RUN mkdir /build/cmd
 
 # Only copy relevant packages to docker container
-ADD main.go /build/cmd/main.go
+ADD ./cmd /build/cmd
 
 # Build
-RUN GOOS=linux go build -tags musl,kafka -a --mod=readonly -installsuffix cgo -ldflags "-s -w -X 'main.buildtime=$(date -u '+%Y-%m-%d %H:%M:%S')' -extldflags '-static'" -o mainFile ./cmd
+RUN GOOS=linux go build -tags musl,kafka -a --mod=readonly -installsuffix cgo -ldflags "-s -w -X 'main.buildtime=$(date -u '+%Y-%m-%d %H:%M:%S')' -extldflags '-static'" -o mainFile ./cmd/message-broker-benchmark
 
 # Add data
-ADD good-payload-audio.txt /build/good-payload-audio.txt
-ADD timestamps.txt /build/timestamps.txt
-
-# Add bad payloads
-ADD bad/ /build/bad
+RUN mkdir /build/tests
+ADD ./tests /build/tests
 
 FROM alpine
 COPY --from=builder /build /app/
