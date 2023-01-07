@@ -1,11 +1,13 @@
 package main
 
 import (
+	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"go.uber.org/zap"
 )
 
 // sendPayloadKafka sends a payload in defined intervals to the Kafka broker
@@ -60,19 +62,16 @@ func sendPayloadKafka(payload []byte, timestamps []string, p *kafka.Producer, OU
 			// 1ms is introduced to prevent duplicate timestamps (which would result in less entries in the database)
 		}
 
-		err = p.Produce(&kafka.Message{
+		kafkamessage := &kafka.Message{
 			TopicPartition: kafka.TopicPartition{Topic: &OUTPUT_TOPIC, Partition: kafka.PartitionAny},
-			Value:          []byte(payload),
-		}, nil)
+			Value:          payload,
+		}
+
+		err = Produce(p, kafkamessage, nil)
 
 		if err != nil {
-			if err.(kafka.Error).Code() == kafka.ErrQueueFull {
-				// Producer queue is full, wait 1s for messages
-				// to be delivered then try again.
-				time.Sleep(time.Second)
-				continue
-			}
-			println("Failed to produce message: %v", err)
+			zap.S().Errorf("Failed to send Kafka message: %s", err)
+			continue
 		}
 
 		totalAmountOfSentMessages++
@@ -87,6 +86,19 @@ func sendPayloadKafka(payload []byte, timestamps []string, p *kafka.Producer, OU
 
 // Kafka function, which sends the payload to the Kafka broker
 func mainKafka(OUTPUT_TOPIC string, HOST string, PORT string) {
+
+	// fetch environment variable SKIP_GOOD_CASE. defaults to false
+	SKIP_GOOD_CASEString := os.Getenv("SKIP_GOOD_CASE")
+	if SKIP_GOOD_CASEString == "" {
+		SKIP_GOOD_CASEString = "false"
+	}
+
+	SKIP_GOOD_CASE, err := strconv.ParseBool(SKIP_GOOD_CASEString)
+	if err != nil {
+		SKIP_GOOD_CASE = false
+	}
+
+	println("SKIP_GOOD_CASE", SKIP_GOOD_CASE)
 
 	// connect to Kafka broker
 	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": HOST + ":" + PORT})
@@ -129,23 +141,26 @@ func mainKafka(OUTPUT_TOPIC string, HOST string, PORT string) {
 
 	// EXECUTE CASE 1: PERFECT
 
-	print("Sending case_perfect to the broker...")
-	// read the payload
-	casePerfectPayload, casePerfectTimestamps := readInPerfectCase()
-	var wg sync.WaitGroup
-	wg.Add(1)
+	if !SKIP_GOOD_CASE {
 
-	go sendPayloadKafka(casePerfectPayload, casePerfectTimestamps, p, OUTPUT_TOPIC, &wg, "case_perfect")
+		println("Sending case_perfect to the broker...")
+		// read the payload
+		casePerfectPayload, casePerfectTimestamps := readInPerfectCase()
+		var wg sync.WaitGroup
+		wg.Add(1)
 
-	wg.Wait()
+		go sendPayloadKafka(casePerfectPayload, casePerfectTimestamps, p, OUTPUT_TOPIC, &wg, "case_perfect")
 
-	println("case_perfect sent")
-	// sleep for 60 seconds
-	println("Sleeping for 60 seconds...")
-	time.Sleep(60 * time.Second)
+		wg.Wait()
 
+		println("case_perfect sent")
+		// sleep for 60 seconds
+		println("Sleeping for 60 seconds...")
+		time.Sleep(60 * time.Second)
+
+	}
 	// EXECUTE CASE 2: DELAYED WITH INCORRECT MESSAGES
-	print("Sending case_delayed and case_incorrect to the broker...")
+	println("Sending case_delayed and case_incorrect to the broker...")
 
 	// read the payload
 	caseDelayedPayload, caseDelayedTimestamps := readInDelayedCase()
@@ -156,6 +171,7 @@ func mainKafka(OUTPUT_TOPIC string, HOST string, PORT string) {
 
 	go sendPayloadKafka(caseDelayedPayload, caseDelayedTimestamps, p, OUTPUT_TOPIC, &wgBad, "case_delayed")
 	go sendPayloadKafka(caseIncorrectPayload, caseIncorrectTimestamps, p, OUTPUT_TOPIC, &wgBad, "case_incorrect")
+	go trackOtherTests()
 
 	wgBad.Wait()
 

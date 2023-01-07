@@ -26,6 +26,7 @@ import (
 	"encoding/base64"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -49,10 +50,25 @@ func main() {
 	HOST := os.Getenv("HOST")
 	PORT := os.Getenv("PORT")
 
-	// Sleep 500s to give the message broker time to start
-	println("Sleeping 500s to give the message broker time to start")
-	time.Sleep(500 * time.Second)
-	println("Finished sleeping")
+	// fetch environment variable SKIP_INITIAL_SLEEP. defaults to false
+	SKIP_INITIAL_SLEEPString := os.Getenv("SKIP_INITIAL_SLEEP")
+	if SKIP_INITIAL_SLEEPString == "" {
+		SKIP_INITIAL_SLEEPString = "false"
+	}
+
+	SKIP_INITIAL_SLEEP, err := strconv.ParseBool(SKIP_INITIAL_SLEEPString)
+	if err != nil {
+		SKIP_INITIAL_SLEEP = false
+	}
+
+	println("SKIP_INITIAL_SLEEP", SKIP_INITIAL_SLEEP)
+
+	// sleep to give the system time to start
+	if !SKIP_INITIAL_SLEEP {
+		println("Sleeping 500s to give the message broker time to start")
+		time.Sleep(500 * time.Second)
+		println("Finished sleeping")
+	}
 
 	// Call the MQTT function if MQTTEnabled is true
 	if MQTTEnabled == "true" {
