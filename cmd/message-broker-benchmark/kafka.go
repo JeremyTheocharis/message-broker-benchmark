@@ -6,12 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/confluentinc/confluent-kafka-go/kafka"
-	"go.uber.org/zap"
+	"github.com/Shopify/sarama"
 )
 
 // sendPayloadKafka sends a payload in defined intervals to the Kafka broker
-func sendPayloadKafka(payload []byte, timestamps []string, p *kafka.Producer, OUTPUT_TOPIC string, wg *sync.WaitGroup, name string) {
+func sendPayloadKafka(payload []byte, timestamps []string, p sarama.SyncProducer, OUTPUT_TOPIC string, wg *sync.WaitGroup, name string) {
 	defer wg.Done()
 
 	lastTimestamp := 0
@@ -62,15 +61,15 @@ func sendPayloadKafka(payload []byte, timestamps []string, p *kafka.Producer, OU
 			// 1ms is introduced to prevent duplicate timestamps (which would result in less entries in the database)
 		}
 
-		kafkamessage := &kafka.Message{
-			TopicPartition: kafka.TopicPartition{Topic: &OUTPUT_TOPIC, Partition: kafka.PartitionAny},
-			Value:          payload,
+		kafkamessage := &sarama.ProducerMessage{
+			Topic: OUTPUT_TOPIC,
+			Value: sarama.ByteEncoder(payload),
 		}
 
-		err = Produce(p, kafkamessage, nil)
+		err = Produce(p, kafkamessage)
 
 		if err != nil {
-			zap.S().Errorf("Failed to send Kafka message: %s", err)
+			println("Failed to send Kafka message: %s", err)
 			continue
 		}
 
@@ -101,43 +100,16 @@ func mainKafka(OUTPUT_TOPIC string, HOST string, PORT string) {
 	println("SKIP_GOOD_CASE", SKIP_GOOD_CASE)
 
 	// connect to Kafka broker
-	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": HOST + ":" + PORT})
+	config := sarama.NewConfig()
+	config.Producer.Retry.Max = 5
+	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Producer.Return.Successes = true
+
+	// create a new producer
+	producer, err := sarama.NewSyncProducer([]string{HOST + ":" + PORT}, config)
 	if err != nil {
-		println("Failed to create producer: %s", err)
 		panic(err)
 	}
-
-	// taken from https://github.com/confluentinc/confluent-kafka-go/blob/master/examples/producer_example/producer_example.go
-	// Listen to all the events on the default events channel
-	go func() {
-		for e := range p.Events() {
-			switch ev := e.(type) {
-			case *kafka.Message:
-				// The message delivery report, indicating success or
-				// permanent failure after retries have been exhausted.
-				// Application level retries won't help since the client
-				// is already configured to do that.
-				m := ev
-				if m.TopicPartition.Error != nil {
-					println("Delivery failed: %v", m.TopicPartition.Error)
-				} else {
-					// println("Delivered message to topic %s [%d] at offset %v",
-					// 	*m.TopicPartition.Topic, m.TopicPartition.Partition, m.TopicPartition.Offset)
-				}
-			case kafka.Error:
-				// Generic client instance-level errors, such as
-				// broker connection failures, authentication issues, etc.
-				//
-				// These errors should generally be considered informational
-				// as the underlying client will automatically try to
-				// recover from any errors encountered, the application
-				// does not need to take action on them.
-				println("Error")
-			default:
-				println("Ignored event: %s", ev)
-			}
-		}
-	}()
 
 	// EXECUTE CASE 1: PERFECT
 
@@ -149,7 +121,7 @@ func mainKafka(OUTPUT_TOPIC string, HOST string, PORT string) {
 		var wg sync.WaitGroup
 		wg.Add(1)
 
-		go sendPayloadKafka(casePerfectPayload, casePerfectTimestamps, p, OUTPUT_TOPIC, &wg, "case_perfect")
+		go sendPayloadKafka(casePerfectPayload, casePerfectTimestamps, producer, OUTPUT_TOPIC, &wg, "case_perfect")
 
 		wg.Wait()
 
@@ -169,8 +141,8 @@ func mainKafka(OUTPUT_TOPIC string, HOST string, PORT string) {
 	var wgBad sync.WaitGroup
 	wgBad.Add(2)
 
-	go sendPayloadKafka(caseDelayedPayload, caseDelayedTimestamps, p, OUTPUT_TOPIC, &wgBad, "case_delayed")
-	go sendPayloadKafka(caseIncorrectPayload, caseIncorrectTimestamps, p, OUTPUT_TOPIC, &wgBad, "case_incorrect")
+	go sendPayloadKafka(caseDelayedPayload, caseDelayedTimestamps, producer, OUTPUT_TOPIC, &wgBad, "case_delayed")
+	go sendPayloadKafka(caseIncorrectPayload, caseIncorrectTimestamps, producer, OUTPUT_TOPIC, &wgBad, "case_incorrect")
 	go trackOtherTests()
 
 	wgBad.Wait()
@@ -182,9 +154,4 @@ func mainKafka(OUTPUT_TOPIC string, HOST string, PORT string) {
 		time.Sleep(1 * time.Second)
 	}
 
-	// flush the producer
-	p.Flush(15 * 1000)
-
-	// close the producer
-	p.Close()
 }
